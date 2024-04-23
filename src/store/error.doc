@@ -1,0 +1,894 @@
+here are my user controllers // controllers/userController.js
+const User = require('../models/User');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const { secret } = require('../config/jwt');
+// Import Order model
+const Order = require('../models/Order');
+
+// Signup function
+const signUp = async (req, res, next) => {
+    try {
+      const { name, email, password } = req.body;
+      
+      // Check if name field is provided
+      if (!name) {
+        return res.status(400).json({ message: 'Name is required' });
+      }
+  
+      // Check if user with the same email already exists
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email already exists' });
+      }
+  
+      // Hash the password
+      const hashedPassword = await bcrypt.hash(password, 10);
+  
+      // Create new user
+      const newUser = new User({
+        name,
+        email,
+        password: hashedPassword
+      });
+  
+      // Save the user to the database
+      await newUser.save();
+  
+      // Generate JWT token
+      const token = jwt.sign({ userId: newUser._id }, secret, { expiresIn: '1h' });
+  
+      // Send response with token and user details
+      res.status(201).json({ token, user: newUser });
+    } catch (error) {
+      next(error);
+    }
+  };
+  
+
+// Signin function
+const signIn = async (req, res, next) => {
+    try {
+      const { email, password } = req.body;
+      
+      // Find user by email
+      const user = await User.findOne({ email });
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+  
+      // Check if password is correct
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ message: 'Invalid password' });
+      }
+  
+      // Generate JWT token with expiration time of one month
+      const token = jwt.sign({ userId: user._id }, secret, { expiresIn: '29d' });
+  
+      // Send response with token and user details
+      res.status(200).json({ token, user });
+    } catch (error) {
+      next(error);
+    }
+  };
+  
+// Get user profile
+// Get user profile with previous orders
+const getUserProfile = async (req, res, next) => {
+    try {
+      // Get user details from request object (authenticated user)
+      const { _id, name, email } = req.user;
+      
+      // Fetch user's previous orders with all details
+      const userWithOrders = await Order.find({ user: _id });
+  
+      // Construct response object with user details and previous orders
+      const userProfile = {
+        _id,
+        name,
+        email,
+        previousOrders: userWithOrders
+      };
+  
+      res.status(200).json(userProfile);
+    } catch (error) {
+      next(error);
+    }
+  };
+
+module.exports = {
+  signUp,
+  signIn,
+  getUserProfile
+};
+and here are their respective routes // userRoutes.js
+const express = require('express');
+const router = express.Router();
+const userController = require('../controllers/userController');
+const authenticateUser = require('../middlewares/authMiddleware'); // Import auth middleware
+
+// Define routes
+router.post('/signup', userController.signUp);
+router.post('/signin', userController.signIn);
+router.get('/:userId', authenticateUser, userController.getUserProfile); // Apply auth middleware here
+
+module.exports = router;
+here are my cart controllers // controllers/cartController.js
+const Cart = require('../models/Cart');
+
+// Add item to cart
+const addItemToCart = async (req, res, next) => {
+  try {
+    const { userId, productId, quantity } = req.body;
+
+    // Check if the user already has a cart
+    let cart = await Cart.findOne({ user: userId });
+
+    if (!cart) {
+      // If the user doesn't have a cart, create a new one
+      cart = new Cart({ user: userId, items: [{ product: productId, quantity }] });
+    } else {
+      // If the user already has a cart, check if the product already exists
+      const existingItemIndex = cart.items.findIndex(item => item.product == productId);
+
+      if (existingItemIndex !== -1) {
+        // If the product already exists in the cart, update the quantity
+        cart.items[existingItemIndex].quantity += quantity;
+      } else {
+        // If the product doesn't exist in the cart, add it
+        cart.items.push({ product: productId, quantity });
+      }
+    }
+
+    // Save the cart
+    await cart.save();
+
+    res.status(200).json({ message: 'Item added to cart successfully', cart });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Remove item from cart
+const removeItemFromCart = async (req, res, next) => {
+    try {
+      const { userId, productId } = req.params; // Changed from req.body to req.params
+  
+      // Find the user's cart
+      const cart = await Cart.findOne({ user: userId });
+  
+      if (!cart) {
+        return res.status(404).json({ message: 'Cart not found' });
+      }
+  
+      // Remove the item from the cart
+      cart.items = cart.items.filter(item => item.product != productId);
+  
+      // Save the updated cart
+      await cart.save();
+  
+      res.status(200).json({ message: 'Item removed from cart successfully', cart });
+    } catch (error) {
+      next(error);
+    }
+  };
+  
+
+// Get user's cart
+const getUserCart = async (req, res, next) => {
+  try {
+    const userId = req.params.userId;
+
+    // Find the user's cart
+    const cart = await Cart.findOne({ user: userId });
+
+    if (!cart) {
+      return res.status(404).json({ message: 'Cart not found' });
+    }
+
+    res.status(200).json(cart);
+  } catch (error) {
+    next(error);
+  }
+};
+// Remove all items from cart
+const removeAllItemsFromCart = async (req, res, next) => {
+    try {
+      const userId = req.params.userId;
+  
+      // Find the user's cart
+      const cart = await Cart.findOne({ user: userId });
+  
+      if (!cart) {
+        return res.status(404).json({ message: 'Cart not found' });
+      }
+  
+      // Empty the items array
+      cart.items = [];
+  
+      // Save the updated cart
+      await cart.save();
+  
+      res.status(200).json({ message: 'Cart emptied successfully', cart });
+    } catch (error) {
+      next(error);
+    }
+  };
+  
+
+// Increase quantity of item in cart
+const increaseItemQuantity = async (req, res, next) => {
+  try {
+    const { userId, productId } = req.params;
+
+    // Find the user's cart
+    const cart = await Cart.findOne({ user: userId });
+
+    if (!cart) {
+      return res.status(404).json({ message: 'Cart not found' });
+    }
+
+    // Find the item in the cart
+    const item = cart.items.find(item => item.product == productId);
+
+    if (!item) {
+      return res.status(404).json({ message: 'Item not found in cart' });
+    }
+
+    // Increase the quantity
+    item.quantity++;
+
+    // Save the updated cart
+    await cart.save();
+
+    res.status(200).json({ message: 'Item quantity increased successfully', cart });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Decrease quantity of item in cart
+const decreaseItemQuantity = async (req, res, next) => {
+  try {
+    const { userId, productId } = req.params;
+
+    // Find the user's cart
+    const cart = await Cart.findOne({ user: userId });
+
+    if (!cart) {
+      return res.status(404).json({ message: 'Cart not found' });
+    }
+
+    // Find the item in the cart
+    const item = cart.items.find(item => item.product == productId);
+
+    if (!item) {
+      return res.status(404).json({ message: 'Item not found in cart' });
+    }
+
+    // Decrease the quantity if it's greater than 1
+    if (item.quantity > 1) {
+      item.quantity--;
+    }
+
+    // Save the updated cart
+    await cart.save();
+
+    res.status(200).json({ message: 'Item quantity decreased successfully', cart });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  addItemToCart,
+  removeItemFromCart,
+  getUserCart,
+  removeAllItemsFromCart,
+  increaseItemQuantity,
+  decreaseItemQuantity
+};
+here are my cart routes // cartRoutes.js
+
+const express = require('express');
+const router = express.Router();
+const cartController = require('../controllers/cartController');
+
+router.post('/add', cartController.addItemToCart);
+router.delete('/remove/:userId/:productId', cartController.removeItemFromCart);
+router.get('/:userId', cartController.getUserCart);
+router.delete('/remove-all/:userId', cartController.removeAllItemsFromCart);
+router.put('/increase-quantity/:userId/:productId', cartController.increaseItemQuantity);
+router.put('/decrease-quantity/:userId/:productId', cartController.decreaseItemQuantity);
+
+module.exports = router;
+here are order controllers // ordersController.js
+const Order = require('../models/Order');
+const Cart = require('../models/Cart');
+const Product = require('../models/Product')
+
+// Create order function
+// Create order function
+const createOrder = async (req, res, next) => {
+  try {
+    const { userId } = req.body;
+
+    // Find the user's cart
+    const cart = await Cart.findOne({ user: userId });
+
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ message: 'Cart is empty' });
+    }
+
+    // Calculate order total
+    let totalAmount = 0;
+    for (const item of cart.items) {
+      // Fetch product details from the database
+      const product = await Product.findById(item.product);
+      if (!product) {
+        return res.status(400).json({ message: `Product with ID ${item.product} not found` });
+      }
+      totalAmount += item.quantity * product.price;
+    }
+
+    // Create the order with payment status as 'pending'
+    const order = new Order({
+      user: userId,
+      items: cart.items,
+      totalAmount,
+      status: 'placed',
+      payment: 'pending', // Payment status set to 'pending'
+    });
+
+    // Save the order to the database
+    await order.save();
+
+    // Empty the user's cart
+    cart.items = [];
+    await cart.save();
+
+    res.status(201).json({ message: 'Order created successfully', order });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get order by ID function
+const getOrderById = async (req, res, next) => {
+  try {
+    const orderId = req.params.orderId;
+
+    // Find the order by ID
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    res.status(200).json(order);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get all orders by user ID
+const getAllOrdersByUser = async (req, res, next) => {
+  try {
+    const userId = req.params.userId;
+
+    // Find all orders for the given user
+    const orders = await Order.find({ user: userId });
+
+    res.status(200).json(orders);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get all orders
+const getAllOrders = async (req, res, next) => {
+  try {
+    // Find all orders and sort them by createdAt field in descending order
+    const orders = await Order.find().sort({ createdAt: -1 });
+
+    res.status(200).json(orders);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update order status
+const updateOrderStatus = async (req, res, next) => {
+  try {
+    const { orderId, status } = req.body;
+
+    // Find the order by ID
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Update the order status
+    order.status = status;
+    await order.save();
+
+    res.status(200).json({ message: 'Order status updated successfully', order });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update payment status
+const updatePaymentStatus = async (req, res, next) => {
+  try {
+    const { orderId, payment } = req.body;
+
+    // Find the order by ID
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Update the payment status
+    order.payment = payment;
+    await order.save();
+
+    res.status(200).json({ message: 'Payment status updated successfully', order });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  createOrder,
+  getOrderById,
+  getAllOrdersByUser,
+  getAllOrders,
+  updateOrderStatus,
+  updatePaymentStatus,
+};
+here are order routes. in Home.js in front end we requesting to wrong functions from store.js // Home.js
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import useAuthStore from "./store";
+
+const Home = () => {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [showLoadAllButton, setShowLoadAllButton] = useState(false);
+  const [loadingUserData, setLoadingUserData] = useState(false);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const userData = useAuthStore((state) => state.user);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchAllProducts = async () => {
+      try {
+        const allProducts = await useAuthStore.getState().getAllProducts();
+        setSearchResults(allProducts);
+        setShowLoadAllButton(false);
+      } catch (error) {
+        console.error("Error fetching all products:", error);
+      }
+    };
+
+    fetchAllProducts();
+  }, []);
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      if (isAuthenticated) {
+        try {
+          setLoadingUserData(true);
+          console.log("userData:", userData); // Log userData to check its value
+          const userId = userData?._id;
+          if (!userId) {
+            console.error('User data not yet available');
+            return;
+          }
+          console.log("Fetching user profile for user:", userId);
+          const user = await useAuthStore.getState().fetchUserProfile(userId);
+          console.log("Fetched user profile:", user); // Log the fetched user profile
+          if (user) {
+            useAuthStore.getState().setUser(user);
+          } else {
+            console.error('User data not found');
+          }
+        } catch (error) {
+          console.error('Error fetching user profile:', error);
+        } finally {
+          setLoadingUserData(false);
+        }
+      }
+    };
+    
+    
+    
+    
+    fetchUserData();
+  }, [isAuthenticated, userData]);
+
+  const handleSearch = async () => {
+    try {
+      let products = [];
+
+      if (searchTerm.trim() === "") {
+        products = await useAuthStore.getState().searchProducts("");
+        setShowLoadAllButton(true);
+      } else {
+        products = await useAuthStore.getState().searchProducts(searchTerm);
+        setShowLoadAllButton(true);
+      }
+
+      setSearchResults(products);
+    } catch (error) {
+      console.error("Error searching products:", error);
+    }
+  };
+
+  const handleAddToCart = async (productId) => {
+    try {
+      if (!isAuthenticated) {
+        navigate("/signin");
+      } else {
+        if (!userData || !userData._id) {
+          console.error("User data not yet available");
+          return;
+        }
+        
+        const userId = userData._id;
+        const quantity = 1;
+        await useAuthStore
+          .getState()
+          .addItemToCart(userId, productId, quantity);
+        alert("Product added to cart!");
+      }
+    } catch (error) {
+      console.error("Error adding product to cart:", error);
+    }
+  };
+
+  const handleLoadAllProducts = async () => {
+    try {
+      const allProducts = await useAuthStore.getState().getAllProducts();
+      setSearchResults(allProducts);
+      setShowLoadAllButton(false);
+    } catch (error) {
+      console.error("Error loading all products:", error);
+    }
+  };
+
+  return (
+    <div className="container mx-auto">
+      <div className="mt-8 mb-4">
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search for products..."
+          className="border border-gray-300 px-4 py-2 rounded-md focus:outline-none focus:border-blue-500"
+        />
+        <button
+          onClick={handleSearch}
+          className="ml-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:bg-blue-600"
+        >
+          Search
+        </button>
+        {showLoadAllButton && (
+          <button
+            onClick={handleLoadAllProducts}
+            className="ml-2 px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 focus:outline-none focus:bg-gray-600"
+          >
+            Load All Products
+          </button>
+        )}
+      </div>
+
+      <div>
+        <h1 className="text-2xl font-semibold mb-4">Search Results</h1>
+        <ul className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {searchResults.map((product) => (
+            <li
+              key={product._id}
+              className="border border-gray-300 rounded-md p-4"
+            >
+              <h2 className="text-lg font-semibold mb-2">{product.name}</h2>
+              <p className="text-gray-600">{product.description}</p>
+              <p className="mt-2">${product.price}</p>
+              {isAuthenticated && userData && (
+                <button
+                  onClick={() => handleAddToCart(product._id)}
+                  className="mt-4 px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 focus:outline-none focus:bg-green-600"
+                >
+                  Add to Cart
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+        {loadingUserData && <p>Loading user data...</p>}
+      </div>
+    </div>
+  );
+};
+
+export default Home;
+here is zustands store.js // store.js
+import create from 'zustand';
+
+const useAuthStore = create((set) => {
+  // Check if there's a token stored in local storage
+  const token = localStorage.getItem('token');
+  const initialState = {
+    isAuthenticated: !!token, // Check if token exists
+    user: null,
+    orders: [],
+    cart: [],
+  };
+
+  return {
+    ...initialState,
+
+    setIsAuthenticated: (value) => set({ isAuthenticated: value }),
+
+    // Function to set user data
+    setUser: (userData) => set({ user: userData }),
+
+    // Function to check user role
+    checkUserRole: (user) => {
+      if (user && user.role === 'admin') {
+        console.log('User is an admin');
+        // Perform actions for admin role
+      } else {
+        console.log('User is not an admin');
+        // Perform actions for non-admin role
+      }
+    },
+
+    // Function to sign out
+    signOut: () => {
+      // Clear token from local storage on sign out
+      localStorage.removeItem('token');
+      set({ isAuthenticated: false, user: null, orders: [], cart: [] });
+    },
+
+    // Function to sign in
+    signIn: async (userData) => {
+      try {
+        // Perform sign-in logic here, such as making a fetch request
+        const response = await fetch('http://localhost:5000/users/signin', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(userData),
+        });
+
+        if (!response.ok) {
+          throw new Error('Sign in failed');
+        }
+
+        // Assuming the response contains user data, authentication token, orders, and cart
+        const { user, token, orders, cart } = await response.json();
+
+        // Save token to local storage
+        localStorage.setItem('token', token);
+
+        // Update the state with user data, orders, and cart
+        set({ isAuthenticated: true, user, orders, cart });
+
+        // Check user role after sign-in
+        useAuthStore.getState().checkUserRole(user); // Call checkUserRole from within the store
+      } catch (error) {
+        console.error('Sign in failed:', error);
+        // Handle sign-in failure
+      }
+    },
+
+    // Function to sign up
+    signUp: async (userData) => {
+      try {
+        const response = await fetch('http://localhost:5000/users/signup', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(userData),
+        });
+
+        if (!response.ok) {
+          throw new Error('Sign up failed');
+        }
+
+        const { token, user } = await response.json();
+
+        // Update the state with user data and authentication status
+        set({ isAuthenticated: true, user });
+
+        // Save token to local storage
+        localStorage.setItem('token', token);
+
+      } catch (error) {
+        console.error('Sign up failed:', error);
+        // Handle sign-up failure
+      }
+    },
+
+    // Function to fetch user profile
+    fetchUserProfile: async (userId) => {
+      try {
+        set({ loading: true }); // Set loading state to true
+        const response = await fetch(`http://localhost:5000/users/${userId}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('token')}`,
+          },
+        });
+        if (!response.ok) {
+          throw new Error('Failed to fetch user profile');
+        }
+        const userProfile = await response.json();
+        set({ user: userProfile, loading: false }); // Update user data and reset loading state
+        return userProfile; // Return the fetched user profile
+      } catch (error) {
+        console.error('Failed to fetch user profile:', error);
+        set({ loading: false }); // Reset loading state on error
+        return null; // Return null if there's an error
+      }
+    },
+    
+    
+
+    // Function to fetch user orders
+    fetchUserOrders: async (userId) => {
+      try {
+        const response = await fetch(`http://localhost:5000/orders/user/${userId}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('token')}`, // Retrieve token from local storage
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch user orders');
+        }
+
+        const orders = await response.json();
+
+        // Update state with user orders
+        set({ orders });
+      } catch (error) {
+        console.error('Failed to fetch user orders:', error);
+      }
+    },
+
+    // Function to fetch user cart
+    fetchUserCart: async (userId) => {
+      try {
+        const response = await fetch(`http://localhost:5000/cart/${userId}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('token')}`, // Retrieve token from local storage
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch user cart');
+        }
+
+        const cart = await response.json();
+
+        // Update state with user cart
+        set({ cart });
+      } catch (error) {
+        console.error('Failed to fetch user cart:', error);
+      }
+    },
+
+    // Function to add item to cart
+    addItemToCart: async (userId, productId, quantity) => {
+      try {
+        const response = await fetch('http://localhost:5000/carts/add', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ userId, productId, quantity }),
+        });
+    
+        if (!response.ok) {
+          throw new Error('Failed to add item to cart');
+        }
+    
+        const { message, cart } = await response.json();
+    
+        // Update the cart state
+        set({ cart });
+    
+        console.log(message);
+      } catch (error) {
+        console.error('Add item to cart failed:', error);
+      }
+    },
+    
+
+    // Function to remove item from cart
+    removeItemFromCart: async (userId, productId) => {
+      try {
+        const response = await fetch(`http://localhost:5000/carts/remove/${userId}/${productId}`, {
+          method: 'DELETE',
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to remove item from cart');
+        }
+
+        const { message, cart } = await response.json();
+
+        // Update the cart state
+        set({ cart });
+
+        console.log(message);
+      } catch (error) {
+        console.error('Remove item from cart failed:', error);
+      }
+    },
+
+    // Function to get user's cart
+    getUserCart: async (userId) => {
+      try {
+        const response = await fetch(`http://localhost:5000/carts/${userId}`);
+
+        if (!response.ok) {
+          throw new Error('Failed to get user cart');
+        }
+
+        const cart = await response.json();
+
+        // Update the cart state
+        set({ cart });
+      } catch (error) {
+        console.error('Get user cart failed:', error);
+      }
+    },
+
+    // Define the getAllProducts function
+    getAllProducts: async () => {
+      try {
+        const response = await fetch('http://localhost:5000/products/allproducts'); // Assuming endpoint for fetching all products
+        if (!response.ok) {
+          throw new Error('Failed to fetch all products');
+        }
+        const products = await response.json();
+        return products;
+      } catch (error) {
+        console.error('Failed to fetch all products:', error);
+        return []; // Return an empty array in case of error
+      }
+    },
+
+    // Define the searchProducts function
+    searchProducts: async (keyword) => {
+      try {
+        const response = await fetch('http://localhost:5000/products/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ keyword }),
+        });
+        if (!response.ok) {
+          throw new Error('Failed to search products');
+        }
+        const products = await response.json();
+        return products;
+      } catch (error) {
+        console.error('Failed to search products:', error);
+        return []; // Return an empty array in case of error
+      }
+    },
+  };
+});
+
+export default useAuthStore;
+ thats why we getting error user data not found 
